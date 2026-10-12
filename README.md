@@ -68,6 +68,26 @@ Safeguards against made-up information:
 - Posts already seen are skipped (also when the same job is cross-posted in several channels), so a job is
   never posted twice.
 
+### Hashing and duplicate detection
+
+Job channels cross-post the same opening across multiple channels with different headers, emojis and
+formatting. To avoid paying the LLM twice and posting the same job multiple times, the pipeline uses two
+cheap, local, pure-Python checks. Neither layer makes any additional LLM calls.
+
+**Layer 1 — `text_hash`.** As soon as a post is read, its text is normalized (whitespace collapsed,
+lowercased) and hashed with SHA-256. If the hash already exists in the `jobs` table, the post is skipped
+before it ever reaches the LLM. This catches byte-identical forwards and reposts.
+
+**Layer 2 — `signature`.** After the LLM extracts the structured record, a second hash is built from the
+job's stable fields: `company`, `city`, `country`, `salary` (digits only), `job_type`, and the first five
+words of `title`. Each field is normalized (Arabic-Indic digits translated to ASCII, punctuation and emojis
+stripped, lowercase), only present fields are included, and they are sorted as `key=value` pairs. At least
+three fields must be present, otherwise the signature is skipped — this prevents false positives between
+two different jobs at the same company. If the resulting hash matches an existing row whose status is
+`match` or `sent`, the new post is marked `rejected` and never reaches your channel.
+
+Both layers run entirely on your machine and cost nothing.
+
 ## What you need
 
 - Python 3.10 or newer.
@@ -219,6 +239,8 @@ hours, so a missed day is covered automatically. If a run fails, the bot posts a
   "Write all descriptive text values in natural, professional Arabic" rule is present in `DETAILS_PROMPT` inside
   `llm.py`. Rows already extracted keep their old details; clear `data/jobs.db` or delete the pending rows to
   re-extract them.
+- **The same job appears twice**: the second copy had no company, or fewer than three signature fields, so it
+  could not be matched. See the "Hashing and duplicate detection" section above.
 - **A volume is not persisting**: check that the Dokploy mount path is `/data` and `DATA_DIR=/data` in the
   environment. Without this, the SQLite file is lost on each container restart.
 - **my.telegram.org shows an error when creating the app**: try again later, from a different network, without a
@@ -233,3 +255,7 @@ hours, so a missed day is covered automatically. If a run fails, the bot posts a
   employer before applying.
 - Stored data: the posts that were read and the extracted details, kept in `data/jobs.db` on your machine (or on
   the mounted `/data` volume when running in Docker).
+
+## Developer
+
+ [**Deaa Dev**](https://deaa.vercel.app)
