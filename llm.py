@@ -2,6 +2,7 @@
   1. filter_posts():     which new posts are tech jobs (small batches, the model returns only post numbers)
   2. extract_details():  one post per request -> company, title, place, requirements, salary ...
 Contacts are found with regular expressions, never by the LLM, and numbers/stack must appear in the post."""
+import hashlib
 import json
 import os
 import re
@@ -37,14 +38,7 @@ Reply with ONLY a JSON object, no markdown and no extra text, with exactly these
 
 Rules:
 - Use ONLY what the post states. If something is not stated use null (or [] for lists). Never guess or infer.
-- Write all descriptive text values in natural, professional Arabic.
-- Keep technical terms, programming languages, frameworks, libraries, tools, methodologies, abbreviations,
-  company names, official job titles, product names, numbers and currencies in their original form
-  (usually English). Do not transliterate technical terms: write Python, React, Docker, not بايثون, رياكت, دوكر.
-- Keep the values of job_type, work_mode and gender exactly as the English enum values listed below.
-- For title: keep the original job title as written; do not translate it.
-- For city and country: use the common Arabic name when it exists, e.g. Dubai -> دبي, UAE -> الإمارات;
-  otherwise keep the original spelling.
+- Write all text values in English. Keep company names, technology names, numbers and currencies exactly as written.
 - is_tech: true only if the post offers at least one software / IT / data / AI / DevOps / security / network /
   QA / embedded job. Jobs in law, administration, supply chain, oil and gas, energy, civil / mechanical /
   electrical engineering, finance, HR, sales and similar are NOT tech, even if the employer is a technology
@@ -283,6 +277,47 @@ def _extra_links(post) -> list:
         return []
 
 
+# ------------------------------------------------------------------ signature (duplicate detection)
+
+def _norm(v) -> str:
+    """Normalize a field for use in the signature: lowercase, keep only letters/digits (Latin + Arabic)."""
+    if not v:
+        return ""
+    s = str(v).casefold().translate(DIGITS)
+    s = re.sub(r"[^\w\u0600-\u06FF]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _digits(v) -> str:
+    if not v:
+        return ""
+    return re.sub(r"\D", "", str(v).translate(DIGITS))
+
+
+def job_signature(details: dict) -> str | None:
+    """Hash of stable fields (company + city + country + salary + job_type + title).
+    Returns None if the job cannot be identified (no company, or fewer than 3 fields present)."""
+    company = _norm(details.get("company"))
+    if not company:
+        return None
+
+    parts = {
+        "company": company,
+        "city":    _norm(details.get("city")),
+        "country": _norm(details.get("country")),
+        "salary":  _digits(details.get("salary")),
+        "type":    details.get("job_type") or "",
+        "title":   " ".join(_norm(details.get("title")).split()[:5]),
+    }
+
+    present = [f"{k}={v}" for k, v in sorted(parts.items()) if v]
+    if len(present) < 3:
+        return None
+
+    key = "|".join(present)
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
 def extract_details(conn) -> None:
     for p in db.posts(conn, "match"):
         if p["details"]:  # already extracted in an earlier run (sending failed back then)
@@ -296,6 +331,15 @@ def extract_details(conn) -> None:
             db.set_status(conn, p["id"], "rejected")
             log(f"  post {p['id']}: not a tech job after all ({details['title']}), rejected")
             continue
+
         details["contacts"] = find_contacts(p["text"], p["channel"], _extra_links(p))
+
+        sig = job_signature(details)
+        if sig and db.find_by_signature(conn, sig, p["id"]):
+            db.set_status(conn, p["id"], "rejected")
+            log(f"  post {p['id']}: duplicate of an existing job (signature {sig}), rejected")
+            continue
+
         db.set_details(conn, p["id"], details)
+        db.set_signature(conn, p["id"], sig)
         log(f"  post {p['id']}: {details['title']} @ {details.get('company')}")

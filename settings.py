@@ -63,42 +63,24 @@ CHANNELS = [
 # Fetch settings (converted from the YAML `fetch` section).
 # Values can be overridden using matching environment variables.
 # -----------------------------------------------------------------------------
-FIRST_RUN_LIMIT = int(os.getenv("FIRST_RUN_LIMIT", "50"))
-MAX_PER_CHANNEL = int(os.getenv("MAX_PER_CHANNEL", "500"))
-MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "7"))
+
+MAX_PER_CHANNEL = int(os.getenv("MAX_PER_CHANNEL", "50"))
+MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "1"))
 MIN_CHARS = int(os.getenv("MIN_CHARS", "40"))
 
 # Compatibility with the previous settings.py version. This assumes the reader's
 # lookback window should match the maximum job age.
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", str(MAX_AGE_DAYS * 24)))
+LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "30"))
 
 # -----------------------------------------------------------------------------
 # LLM settings (converted from the YAML `llm` section).
 # -----------------------------------------------------------------------------
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "20"))
-MAX_BATCH_CHARS = int(os.getenv("MAX_BATCH_CHARS", "12000"))
-MAX_CHARS_PER_MESSAGE = int(os.getenv("MAX_CHARS_PER_MESSAGE", "1500"))
-MIN_SCORE = int(os.getenv("MIN_SCORE", "1"))
+MAX_CHARS_PER_MESSAGE = int(os.getenv("MAX_CHARS_PER_MESSAGE", "900"))
 
 # Compatibility with the previous settings.py name.
 MAX_CHARS_PER_POST = MAX_CHARS_PER_MESSAGE
 
-# -----------------------------------------------------------------------------
-# Schedule settings (used by --loop / the Docker container).
-# -----------------------------------------------------------------------------
-RUN_EVERY_HOURS = int(os.getenv("RUN_EVERY_HOURS", "8"))
-
-# -----------------------------------------------------------------------------
-# Telegram notification settings (converted from the YAML `notify` section).
-# Arabic is selected intentionally; the previous YAML value `en` would request
-# English labels/text wherever the application uses this setting.
-# -----------------------------------------------------------------------------
-MAX_PER_RUN = int(os.getenv("MAX_PER_RUN", "25"))
-NOTIFY_LANGUAGE = os.getenv("NOTIFY_LANGUAGE", "ar").strip().lower()
-LANGUAGE = NOTIFY_LANGUAGE  # compatibility alias for code expecting LANGUAGE
-SOURCE_BUTTON = os.getenv("SOURCE_BUTTON", "true").strip().lower() in {
-    "1", "true", "yes", "y", "on"
-}
 
 # -----------------------------------------------------------------------------
 # Local storage.

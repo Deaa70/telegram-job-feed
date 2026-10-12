@@ -18,11 +18,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     extra_links TEXT,
     status      TEXT    NOT NULL DEFAULT 'new',
     details     TEXT,
+    signature   TEXT,
     created_at  TEXT    NOT NULL,
     UNIQUE (channel, msg_id)
 );
-CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
-CREATE INDEX IF NOT EXISTS idx_jobs_hash   ON jobs (text_hash);
+CREATE INDEX IF NOT EXISTS idx_jobs_status    ON jobs (status);
+CREATE INDEX IF NOT EXISTS idx_jobs_hash      ON jobs (text_hash);
+CREATE INDEX IF NOT EXISTS idx_jobs_signature ON jobs (signature);
 """
 
 
@@ -31,7 +33,17 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the DB was first created, without losing data."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "signature" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN signature TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_signature ON jobs (signature)")
+    conn.commit()
 
 
 def add_post(conn, channel, msg_id, text, link, extra_links) -> bool:
@@ -61,6 +73,19 @@ def set_status(conn, post_id, status) -> None:
 def set_details(conn, post_id, details: dict) -> None:
     conn.execute("UPDATE jobs SET details = ? WHERE id = ?", (json.dumps(details, ensure_ascii=False), post_id))
     conn.commit()
+
+
+def set_signature(conn, post_id, signature) -> None:
+    conn.execute("UPDATE jobs SET signature = ? WHERE id = ?", (signature, post_id))
+    conn.commit()
+
+
+def find_by_signature(conn, signature, exclude_id):
+    """Return an existing row with the same signature that was already accepted or sent, if any."""
+    return conn.execute(
+        "SELECT id FROM jobs WHERE signature = ? AND status IN ('match', 'sent') AND id != ?",
+        (signature, exclude_id),
+    ).fetchone()
 
 
 def counts(conn) -> dict:
