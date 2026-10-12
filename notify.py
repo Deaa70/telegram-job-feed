@@ -13,8 +13,6 @@ SECONDS_BETWEEN_MESSAGES = 3   # Telegram allows about 20 messages per minute in
 MAX_VISIBLE_CHARS = 3800       # Telegram's limit is 4096 visible characters
 CONFIG_ERRORS = ("chat not found", "administrator", "not enough rights", "no rights", "not a member", "kicked")
 
-
-
 JOB_TYPE_AR = {
     "full-time": "دوام كامل",
     "part-time": "دوام جزئي",
@@ -32,6 +30,7 @@ GENDER_AR = {
     "female": "أنثى",
     "any": "ذكر أو أنثى",
 }
+
 
 class TelegramError(RuntimeError):
     def __init__(self, status: int, text: str):
@@ -65,91 +64,82 @@ def bullets(items) -> str:
     return "\n".join(f"• {esc(i)}" for i in items)
 
 
-def format_message(row) -> str:
-    """Telegram HTML. Arabic labels, Arabic descriptive text, tech terms stay in English."""
-    d = json.loads(row["details"])
+HASHTAG_OK = re.compile(r"[^A-Za-z0-9_]")
 
-    blocks = {
-        "head": (
-            f"<b>{esc(d.get('title') or 'وظيفة')}</b>\n"
-            f"🏢 <b>{esc(d.get('company') or 'الشركة غير مذكورة')}</b>"
-        )
-    }
+
+def _hashtag(tag: str) -> str | None:
+    """Turn a tag like 'Next.js' or 'C++' into a Telegram-safe hashtag: #Nextjs, #Cplusplus.
+    Telegram hashtags only allow letters, digits and underscores."""
+    t = tag.strip()
+    if not t:
+        return None
+    # Replace common symbols with words so the meaning survives
+    t = (t.replace("++", "plusplus").replace("#", "sharp").replace(".", "").replace("-", "")
+           .replace(" ", "").replace("/", ""))
+    t = HASHTAG_OK.sub("", t)
+    if not t or not re.search(r"[A-Za-z]", t):
+        return None
+    return "#" + t
+
+
+def format_message(row) -> str:
+    """Telegram HTML. Starts with the bold title; sections are separated by blank lines; one contact per line."""
+    d = json.loads(row["details"])
+    blocks = {"head": f"<b>{esc(d.get('title') or 'Job')}</b>\n🏢 <b>{esc(d.get('company') or 'Company not stated')}</b>"}
 
     facts = []
-
     place = ", ".join(x for x in (d.get("city"), d.get("country")) if x)
-    work_mode = WORK_MODE_AR.get(d.get("work_mode"), d.get("work_mode")) if d.get("work_mode") else ""
-    where = " · ".join(
-        x for x in (
-            f"<b>{esc(place)}</b>" if place else "",
-            esc(work_mode) if work_mode else "",
-        ) if x
-    )
+    where = " · ".join(x for x in (f"<b>{esc(place)}</b>" if place else "", esc(d["work_mode"]) if d.get("work_mode") else "") if x)
     if where:
         facts.append(f"📍 {where}")
-
     if d.get("visa"):
         facts.append(f"🛂 {esc(d['visa'])}")
-
     if d.get("job_type"):
         facts.append(f"💼 {esc(JOB_TYPE_AR.get(d['job_type'], d['job_type']))}")
-
     if d.get("working_hours"):
-        facts.append(f"⏱ <b>ساعات العمل:</b> {esc(d['working_hours'])}")
-
+        facts.append(f"⏱ <b>Hours:</b> {esc(d['working_hours'])}")
     if d.get("duration"):
-        facts.append(f"📆 <b>المدة:</b> {esc(d['duration'])}")
-
-    gender = GENDER_AR.get(d.get("gender"), "غير محدد")
-    facts.append(f"👥 <b>الجنس:</b> {gender}")
-
+        facts.append(f"📆 <b>Duration:</b> {esc(d['duration'])}")
+    gender = {"male": "Male", "female": "Female", "any": "Male or female"}.get(d.get("gender"), "Not specified")
+    facts.append(f"👥 <b>Gender:</b> {gender}")
     if d.get("salary"):
-        facts.append(f"💰 <b>الراتب:</b> {esc(d['salary'])}")
-
+        facts.append(f"💰 <b>Salary:</b> {esc(d['salary'])}")
     if d.get("deadline"):
-        facts.append(f"📅 <b>آخر موعد للتقديم:</b> {esc(d['deadline'])}")
-
+        facts.append(f"📅 <b>Deadline:</b> {esc(d['deadline'])}")
     blocks["facts"] = "\n".join(facts)
 
     if d.get("summary"):
-        blocks["about"] = f"📝 <b>نبذة</b>\n{esc(d['summary'])}"
-
+        blocks["about"] = f"📝 <b>About</b>\n{esc(d['summary'])}"
     if d.get("positions"):
-        blocks["positions"] = f"🧩 <b>الوظائف</b>\n{bullets(d['positions'])}"
-
+        blocks["positions"] = f"🧩 <b>Positions</b>\n{bullets(d['positions'])}"
     if d.get("responsibilities"):
-        blocks["resp"] = f"✅ <b>المسؤوليات</b>\n{bullets(d['responsibilities'])}"
-
+        blocks["resp"] = f"✅ <b>Responsibilities</b>\n{bullets(d['responsibilities'])}"
     if d.get("requirements"):
-        blocks["req"] = f"📋 <b>المتطلبات</b>\n{bullets(d['requirements'])}"
-
+        blocks["req"] = f"📋 <b>Requirements</b>\n{bullets(d['requirements'])}"
     if d.get("stack"):
-        blocks["stack"] = f"🛠 <b>التقنيات:</b> {esc(', '.join(d['stack']))}"
-
+        blocks["stack"] = f"🛠 <b>Tech stack:</b> {esc(', '.join(d['stack']))}"
     if d.get("benefits"):
-        blocks["benefits"] = f"🎁 <b>المزايا</b>\n{bullets(d['benefits'])}"
+        blocks["benefits"] = f"🎁 <b>Benefits</b>\n{bullets(d['benefits'])}"
 
     contacts = d.get("contacts") or {}
-    lines = [
-        f"{icon} {esc(v)}"
-        for key, icon in (
-            ("phones", "📱"),
-            ("emails", "✉️"),
-            ("handles", "💬"),
-            ("links", "🔗"),
-        )
-        for v in contacts.get(key) or []
-    ]
+    lines = [f"{icon} {esc(v)}" for key, icon in (("phones", "📱"), ("emails", "✉️"), ("handles", "💬"), ("links", "🔗"))
+             for v in contacts.get(key) or []]
     if lines:
-        blocks["contact"] = "📞 <b>التواصل</b>\n" + "\n".join(lines)
+        blocks["contact"] = "📞 <b>Contact</b>\n" + "\n".join(lines)
 
-    for name in ("benefits", "resp", "about"):
+    # Hashtags go last so they don't interrupt the reading flow but remain searchable.
+    tags = d.get("tags") or []
+    hashtags = [h for h in (_hashtag(t) for t in tags) if h]
+    if hashtags:
+        blocks["tags"] = " ".join(hashtags)
+
+    for name in ("benefits", "resp", "about", "tags"):  # only if the message is too long for Telegram
         if len(to_plain("\n\n".join(blocks.values()))) <= MAX_VISIBLE_CHARS:
             break
         blocks.pop(name, None)
-
     return "\n\n".join(blocks.values())
+
+
 # ------------------------------------------------------------------ sending
 
 def send_one(token, chat_id, row) -> None:
@@ -157,9 +147,6 @@ def send_one(token, chat_id, row) -> None:
     text = format_message(row)
     base = {"chat_id": chat_id, "disable_web_page_preview": True}
     variants = [{**base, "text": text, "parse_mode": "HTML"}, {**base, "text": to_plain(text)}]
-    # if row["link"]:
-    #     button = {"inline_keyboard": [[{"text": "Open post", "url": row["link"]}]]}
-    #     variants.insert(0, {**variants[0], "reply_markup": button})
     for i, payload in enumerate(variants):
         try:
             api(token, "sendMessage", payload)

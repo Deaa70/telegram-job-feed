@@ -33,8 +33,8 @@ DETAILS_PROMPT = """You extract facts from ONE job post (Arabic and/or English).
 Reply with ONLY a JSON object, no markdown and no extra text, with exactly these keys:
 {"is_tech": true, "title": "", "company": null, "positions": [], "summary": null, "job_type": null,
  "work_mode": null, "city": null, "country": null, "visa": null, "working_hours": null, "duration": null,
- "gender": null, "salary": null, "deadline": null, "stack": [], "responsibilities": [], "requirements": [],
- "benefits": []}
+ "gender": null, "salary": null, "deadline": null, "stack": [], "tags": [], "responsibilities": [],
+ "requirements": [], "benefits": []}
 
 Rules:
 - Use ONLY what the post states. If something is not stated use null (or [] for lists). Never guess or infer.
@@ -62,6 +62,18 @@ Rules:
 - salary: the pay exactly as written in the post, with its numbers and currency. null if no amount is given.
 - deadline: the application deadline exactly as written, else null.
 - stack: technologies, languages, frameworks and tools named in the post, written exactly as in the post. At most 8.
+- tags: canonical, normalized search keywords for this job. Unlike stack, use ONE canonical spelling for each
+  technology regardless of how the post wrote it. Use short, well-known names. Include:
+    * programming languages: "Python", "JavaScript", "TypeScript", "Java", "C#", "C++", "Go", "Rust", "PHP", "Ruby", "Swift", "Kotlin", "Dart", "SQL"
+    * frameworks and libraries: "React", "Next.js", "Vue", "Angular", "Node.js", "Django", "Flask", "FastAPI", "Laravel", "Spring", "ASP.NET", "Flutter", "React Native", ".NET"
+    * databases: "PostgreSQL", "MySQL", "MongoDB", "Redis", "SQLite", "Oracle", "SQL Server"
+    * cloud and devops: "AWS", "Azure", "GCP", "Docker", "Kubernetes", "CI/CD", "Terraform", "Linux"
+    * domains: "Frontend", "Backend", "Full Stack", "Mobile", "DevOps", "Data", "AI", "Machine Learning",
+      "Deep Learning", "Data Science", "Data Engineering", "Cybersecurity", "QA", "Testing", "Embedded",
+      "Blockchain", "Game Development", "UI/UX", "IT Support", "Networking", "Sysadmin"
+    * only add a tag if the post genuinely mentions or clearly implies the technology or domain.
+    * do NOT include the company name, the country, the job type, or the seniority level.
+    * output English tags only, even if the post is in Arabic. At most 10 tags.
 - responsibilities: up to 6 short items (at most 15 words each) taken from the post.
 - requirements: up to 8 short items (education, years of experience, skills, certifications, spoken languages),
   at most 15 words each.
@@ -229,6 +241,28 @@ def _verified(value, post_numbers):
     return value
 
 
+TAG_RE = re.compile(r"[^A-Za-z0-9+#.\- ]+")
+
+
+def _clean_tags(values, max_items=10):
+    """Normalize tags: keep Latin letters/digits, common symbols (+, #, ., -), collapse spaces.
+    Drops anything longer than 30 chars and anything that is not Latin-only (Arabic tags are skipped)."""
+    out = []
+    for v in values if isinstance(values, list) else []:
+        v = _text(v, 40)
+        if not v:
+            continue
+        v = TAG_RE.sub("", v).strip()
+        if not v or len(v) > 30:
+            continue
+        # require at least one Latin letter
+        if not re.search(r"[A-Za-z]", v):
+            continue
+        if v.casefold() not in {o.casefold() for o in out}:
+            out.append(v)
+    return out[:max_items]
+
+
 def parse_details(raw: str, post: str) -> dict:
     data = load_json(raw)
     if not isinstance(data, dict):
@@ -242,6 +276,7 @@ def parse_details(raw: str, post: str) -> dict:
 
     gender = _text(data.get("gender"), 20)
     stack = [s for s in _list(data.get("stack"), 8, 40) if " ".join(s.casefold().split()) in post_cf]
+    tags = _clean_tags(data.get("tags"), 10)
     salary = _text(data.get("salary"), 80)
     if salary and not re.search(r"\d", _numbers(salary)):
         salary = None
@@ -264,6 +299,7 @@ def parse_details(raw: str, post: str) -> dict:
         "salary": _verified(salary, post_numbers),
         "deadline": _verified(_text(data.get("deadline"), 50), post_numbers),
         "stack": stack,
+        "tags": tags,
         "responsibilities": _list(data.get("responsibilities"), 6, 130),
         "requirements": _list(data.get("requirements"), 8, 130),
         "benefits": _list(data.get("benefits"), 5, 110),
@@ -325,7 +361,7 @@ def extract_details(conn) -> None:
         details = ask(DETAILS_PROMPT, p["text"][:3500], lambda raw, text=p["text"]: parse_details(raw, text))
         if details is None:  # still send it: first line as title, plus the contacts
             first_line = next((ln.strip() for ln in p["text"].splitlines() if ln.strip()), "")
-            details = {"is_tech": True, "title": first_line[:90] or None}
+            details = {"is_tech": True, "title": first_line[:90] or None, "tags": []}
             log(f"  post {p['id']}: extraction failed, it will be sent in a simpler format")
         elif not details["is_tech"]:
             db.set_status(conn, p["id"], "rejected")
